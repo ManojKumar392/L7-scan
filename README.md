@@ -5,6 +5,6 @@ Have this pretrained model in the deployment folder :-
 
 Run this code to run the program
 
-`python app.py`
+`python main.py`
 
-`streamlit run app.py`
+`streamlit run main.py`
