@@ -10,11 +10,11 @@ import torchvision
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import pytesseract
-from io import StringIO
 import fitz  # PyMuPDF
+from matplotlib import pyplot as plt
 
-# pytesseract.pytesseract.tesseract_cmd = r'C:/Program Files/Tesseract-OCR/tesseract.exe'
 
+# Define transformations
 TRANSFORM = A.Compose([
     A.Normalize(
         mean=[0.485, 0.456, 0.406],
@@ -24,6 +24,7 @@ TRANSFORM = A.Compose([
     ToTensorV2()
 ])
 
+# Define DenseNet architecture
 class DenseNet(nn.Module):
     def __init__(self, weights="imagenet", requires_grad=True):
         super(DenseNet, self).__init__()
@@ -32,9 +33,9 @@ class DenseNet(nn.Module):
         self.densenet_out_2 = torch.nn.Sequential()
         self.densenet_out_3 = torch.nn.Sequential()
 
-        for x in range(8):  # small dimension information like lines 
+        for x in range(8):  
             self.densenet_out_1.add_module(str(x), denseNet[x])
-        for x in range(8, 10):  # large dimension like shapes
+        for x in range(8, 10):  
             self.densenet_out_2.add_module(str(x), denseNet[x])
 
         self.densenet_out_3.add_module(str(10), denseNet[10])
@@ -44,11 +45,12 @@ class DenseNet(nn.Module):
                 param.requires_grad = False
 
     def forward(self, x):
-        out_1 = self.densenet_out_1(x)  # torch.Size([1, 256, 64, 64])
-        out_2 = self.densenet_out_2(out_1)  # torch.Size([1, 512, 32, 32])
-        out_3 = self.densenet_out_3(out_2)  # torch.Size([1, 1024, 32, 32])
+        out_1 = self.densenet_out_1(x)  
+        out_2 = self.densenet_out_2(out_1)  
+        out_3 = self.densenet_out_3(out_2)  
         return out_1, out_2, out_3
 
+# Define TableDecoder architecture
 class TableDecoder(nn.Module):
     def __init__(self, channels, kernels, strides):
         super(TableDecoder, self).__init__()
@@ -74,14 +76,15 @@ class TableDecoder(nn.Module):
             stride=strides[3])
 
     def forward(self, x, pool_3_out, pool_4_out):
-        x = self.conv_7_table(x)  # [1, 256, 32, 32]
-        out = self.upsample_1_table(x)  # [1, 128, 64, 64]
-        out = torch.cat((out, pool_4_out), dim=1)  # [1, 640, 64, 64]
-        out = self.upsample_2_table(out)  # [1, 256, 128, 128]
-        out = torch.cat((out, pool_3_out), dim=1)  # [1, 512, 128, 128]
-        out = self.upsample_3_table(out)  # [1, 3, 1024, 1024]
+        x = self.conv_7_table(x)  
+        out = self.upsample_1_table(x)  
+        out = torch.cat((out, pool_4_out), dim=1)  
+        out = self.upsample_2_table(out)  
+        out = torch.cat((out, pool_3_out), dim=1)  
+        out = self.upsample_3_table(out)  
         return out
 
+# Define ColumnDecoder architecture
 class ColumnDecoder(nn.Module):
     def __init__(self, channels, kernels, strides):
         super(ColumnDecoder, self).__init__()
@@ -108,14 +111,15 @@ class ColumnDecoder(nn.Module):
             stride=strides[3])
 
     def forward(self, x, pool_3_out, pool_4_out):
-        x = self.conv_8_column(x)  # [1, 256, 32, 32]
-        out = self.upsample_1_column(x)  # [1, 128, 64, 64]
-        out = torch.cat((out, pool_4_out), dim=1)  # [1, 640, 64, 64]
-        out = self.upsample_2_column(out)  # [1, 256, 128, 128]
-        out = torch.cat((out, pool_3_out), dim=1)  # [1, 512, 128, 128]
-        out = self.upsample_3_column(out)  # [1, 3, 1024, 1024]
+        x = self.conv_8_column(x)  
+        out = self.upsample_1_column(x)  
+        out = torch.cat((out, pool_4_out), dim=1)  
+        out = self.upsample_2_column(out)  
+        out = torch.cat((out, pool_3_out), dim=1)  
+        out = self.upsample_3_column(out)  
         return out
 
+# Define the main network
 class TableNet(nn.Module):
     def __init__(self):
         super(TableNet, self).__init__()
@@ -126,7 +130,6 @@ class TableNet(nn.Module):
         self.kernels = [(1, 1), (1, 1), (2, 2), (16, 16)]
         self.strides = [(1, 1), (1, 1), (2, 2), (16, 16)]
 
-        # common layer
         self.conv6 = nn.Sequential(
             nn.Conv2d(in_channels=self.in_channels, out_channels=256, kernel_size=(1, 1)),
             nn.ReLU(inplace=True),
@@ -140,11 +143,12 @@ class TableNet(nn.Module):
 
     def forward(self, x):
         pool_3_out, pool_4_out, pool_5_out = self.base_model(x)
-        conv_out = self.conv6(pool_5_out)  # [1, 256, 32, 32]
-        table_out = self.table_decoder(conv_out, pool_3_out, pool_4_out)  # torch.Size([1, 1, 1024, 1024])
-        column_out = self.column_decoder(conv_out, pool_3_out, pool_4_out)  # torch.Size([1, 1, 1024, 1024])
+        conv_out = self.conv6(pool_5_out)  
+        table_out = self.table_decoder(conv_out, pool_3_out, pool_4_out)  
+        column_out = self.column_decoder(conv_out, pool_3_out, pool_4_out)  
         return table_out, column_out
 
+# Load model
 @st.cache_resource()
 def load_model():
     model = TableNet()
@@ -152,14 +156,15 @@ def load_model():
     model.eval()
     return model
 
+# Perform OCR
 def perform_ocr(image):
     if isinstance(image, np.ndarray):
         image = Image.fromarray(image)
     config = '--psm 6'
-    return pytesseract.image_to_string(image, lang='eng', config =config)
+    return pytesseract.image_to_string(image, lang='eng', config=config)
 
+# Convert PDF to images
 def pdf_to_images(pdf_file):
-    """Convert PDF to a list of images, one per page."""
     pdf_data = pdf_file.read()
     doc = fitz.open("pdf", pdf_data)
     images = []
@@ -169,10 +174,37 @@ def pdf_to_images(pdf_file):
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         images.append(img)
     return images
+
+def split_columns(image, vertical_lines):
+    sorted_lines = sorted(vertical_lines, key=lambda x: x[0][0])  # Ensure lines are sorted correctly
+    columns = []
+    for i in range(len(sorted_lines) - 1):
+        x1 = sorted_lines[i][0][0]
+        x2 = sorted_lines[i + 1][0][0]
+        columns.append(image.crop((x1, 0, x2, image.size[1])))  # Crop image based on sorted lines
+    return columns
+
+# Column Image Processing
+def process_column_image(column_crop):
+    # Convert to grayscale
+    column_image = np.array(column_crop.convert('L'))
     
+    # Thresholding the image to a binary image
+    _, column_bin = cv2.threshold(column_image, 128, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    
+    # Inverting the image
+    column_bin = 255 - column_bin
+    
+    return column_bin
+
 def predict(image):
     with st.spinner('Processing...'):
         orig_image = image.resize((1024, 1024))
+
+        # Ensure image is in RGB format
+        if orig_image.mode != 'RGB':
+            orig_image = orig_image.convert('RGB')
+
         test_img = np.array(orig_image.convert('LA').convert("RGB"))
 
         now = datetime.now()
@@ -184,18 +216,20 @@ def predict(image):
             table_out = torch.sigmoid(table_out)
             column_out = torch.sigmoid(column_out)
 
-        # Convert outputs to numpy arrays
         table_out = (table_out.detach().numpy().squeeze(0).transpose(1, 2, 0) > 0.5).astype(np.uint8)
         column_out = (column_out.detach().numpy().squeeze(0).transpose(1, 2, 0) > 0.5).astype(np.uint8)
 
-        # Find contours for table and column masks
         table_contours, _ = cv2.findContours(table_out, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         column_contours, _ = cv2.findContours(column_out, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # Draw contours on the image
+        if not column_contours:
+            st.write("No column contours found. Skipping page.")
+            return
+
+        # Process each column
         image_with_contours = np.array(orig_image)
-        color_table = (0, 255, 0)  # Green for table contours
-        color_column = (255, 0, 0)  # Blue for column contours
+        color_table = (0, 255, 0)
+        color_column = (255, 0, 0)
 
         for contour in table_contours:
             cv2.drawContours(image_with_contours, [contour], -1, color_table, 2)
@@ -203,49 +237,51 @@ def predict(image):
         for contour in column_contours:
             cv2.drawContours(image_with_contours, [contour], -1, color_column, 2)
 
-        # Display the image with contours
         st.image(image_with_contours, caption="Image with Table and Column Contours", use_column_width=True)
 
         column_regions = []
         sorted_column_regions = []
 
-        # Initialize DataFrame to collect OCR results
         df = pd.DataFrame()
 
-        for i, contour in enumerate(column_contours):
+        # Sort column contours by their bounding rectangle's x-coordinate
+        for i, contour in enumerate(sorted(column_contours, key=lambda c: cv2.boundingRect(c)[0])):
             x, y, w, h = cv2.boundingRect(contour)
             column_region = column_out[y:y + h, x:x + w]
 
-            # Check if the column region has content
-            if not np.any(column_region):
-                st.write(f"## Column {i + 1} (Empty, skipping)")
+            # Check for content and minimum area threshold
+            if not np.any(column_region) or w * h < 100:  # Adjust the area threshold as needed
+                st.write(f"## Column {i + 1} (Empty or too small, skipping)")
                 continue
 
-            # Crop the column region from the original image
             column_crop = orig_image.crop((x, y, x + w, y + h))
             column_regions.append(column_crop)
 
-            # Perform OCR on the cropped column
-            ocr_text = perform_ocr(column_crop)
+            # Detect horizontal lines in the column crop
+            img_bin = np.array(column_crop.convert('L'))
+            hor_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1))
+            image_2 = cv2.erode(img_bin, hor_kernel, iterations=3)
+            horizontal_lines = cv2.dilate(image_2, hor_kernel, iterations=3)
+            cv2.imwrite(f"column_{i + 1}_horizontal.jpg", horizontal_lines)
+
+            # Column Image Processing
+            column_bin = process_column_image(column_crop)
+
+            # Display the processed column image
+            st.image(column_bin, caption=f"Processed Column {i + 1}", use_column_width=True)
+
+            ocr_text = perform_ocr(column_bin)
             st.write(f"### Column {i + 1} OCR Result:")
 
-            # Show the cropped column region
-            st.image(column_crop, caption=f"Column {i + 1} Region", use_column_width=True)
-
-            # Split the OCR text into lines
             lines = ocr_text.splitlines()
             st.write(f"Lines in Column {i + 1}:", lines)
 
-            # Filter out empty lines
             cleaned_lines = [line for line in lines if line.strip() != '']
             st.write(f"Cleaned Lines in Column {i + 1}:", cleaned_lines)
 
-            # Add cleaned lines to DataFrame
             if df.empty:
-                # Initialize DataFrame with cleaned lines as rows
                 df = pd.DataFrame({f"Column {i + 1}": cleaned_lines})
             else:
-                # Pad cleaned lines with empty strings to match the number of rows
                 max_len = max(len(df), len(cleaned_lines))
                 cleaned_lines.extend([''] * (max_len - len(cleaned_lines)))
                 for j, line in enumerate(cleaned_lines):
@@ -253,11 +289,9 @@ def predict(image):
                         df[f"Column {i + 1}"] = ''
                     df.at[j, f"Column {i + 1}"] = line
 
-        # Display the combined table
         st.write("### Combined OCR Result Table:")
         st.write(df)
 
-        # Log the number of column regions extracted
         st.write(f"Total columns extracted: {len(column_regions)}")
 
         end_time = datetime.now()
@@ -265,7 +299,7 @@ def predict(image):
         time = "{}".format(difference)
         st.write(f"Processing time: {time} secs")
 
-# Streamlit app setup...
+# Streamlit app setup.
 
 st.header("Data Extraction from Tables")
 
@@ -276,4 +310,3 @@ if file is not None:
     for i, image in enumerate(images):
         st.write(f"Processing page {i + 1}/{len(images)}")
         predict(image)
-
