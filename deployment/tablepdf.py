@@ -12,7 +12,7 @@ from albumentations.pytorch import ToTensorV2
 import pytesseract
 import fitz  # PyMuPDF
 from matplotlib import pyplot as plt
-
+from app2 import process_image_app
 
 # Define transformations
 TRANSFORM = A.Compose([
@@ -175,15 +175,6 @@ def pdf_to_images(pdf_file):
         images.append(img)
     return images
 
-def split_columns(image, vertical_lines):
-    sorted_lines = sorted(vertical_lines, key=lambda x: x[0][0])  # Ensure lines are sorted correctly
-    columns = []
-    for i in range(len(sorted_lines) - 1):
-        x1 = sorted_lines[i][0][0]
-        x2 = sorted_lines[i + 1][0][0]
-        columns.append(image.crop((x1, 0, x2, image.size[1])))  # Crop image based on sorted lines
-    return columns
-
 # Column Image Processing
 def process_column_image(column_crop):
     # Convert to grayscale
@@ -239,60 +230,61 @@ def predict(image):
 
         st.image(image_with_contours, caption="Image with Table and Column Contours", use_column_width=True)
 
+        # Find the bounding box of the table
+        table_x, table_y, table_w, table_h = cv2.boundingRect(table_contours[0])
+
         column_regions = []
         sorted_column_regions = []
 
         df = pd.DataFrame()
+        biglist = []
 
         # Sort column contours by their bounding rectangle's x-coordinate
         for i, contour in enumerate(sorted(column_contours, key=lambda c: cv2.boundingRect(c)[0])):
             x, y, w, h = cv2.boundingRect(contour)
-            column_region = column_out[y:y + h, x:x + w]
+            
+            # Adjust column bounding box to match the table's top and bottom
+            column_region = column_out[table_y:table_y + table_h, x:x + w]
 
             # Check for content and minimum area threshold
             if not np.any(column_region) or w * h < 100:  # Adjust the area threshold as needed
                 st.write(f"## Column {i + 1} (Empty or too small, skipping)")
                 continue
 
-            column_crop = orig_image.crop((x, y, x + w, y + h))
-            column_regions.append(column_crop)
+            # Use OpenCV for cropping to maintain quality
+            orig_image_np = np.array(orig_image)
+            
+            try:
+                # Use OpenCV for cropping to maintain quality
+                column_crop = orig_image_np[y:y + h, x:x + w]
+                column_crop_pil = Image.fromarray(column_crop)
 
-            # Detect horizontal lines in the column crop
-            img_bin = np.array(column_crop.convert('L'))
-            hor_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1))
-            image_2 = cv2.erode(img_bin, hor_kernel, iterations=3)
-            horizontal_lines = cv2.dilate(image_2, hor_kernel, iterations=3)
-            cv2.imwrite(f"column_{i + 1}_horizontal.jpg", horizontal_lines)
+                # Detect horizontal lines in the column crop
+                img_bin = cv2.cvtColor(column_crop, cv2.COLOR_RGB2GRAY)
+                hor_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1))
+                image_2 = cv2.erode(img_bin, hor_kernel, iterations=3)
+                horizontal_lines = cv2.dilate(image_2, hor_kernel, iterations=3)
+                cv2.imwrite(f"column_{i + 1}_horizontal.jpg", horizontal_lines)
+                
+                # Column Image Processing
+                list1 = process_image_app(column_crop)
+                st.image(column_crop_pil, caption=f"Processed Column {i + 1}", use_column_width=True)
+                print("List size is ", len(list1), "\n")
+                biglist.append(list1)
 
-            # Column Image Processing
-            column_bin = process_column_image(column_crop)
+            except Exception as e:
+                st.write(f"## Error processing Column {i + 1}: not a proper table")
+                continue
 
-            # Display the processed column image
-            st.image(column_bin, caption=f"Processed Column {i + 1}", use_column_width=True)
+        # Convert 2D array to DataFrame
+        df = pd.DataFrame(biglist)
 
-            ocr_text = perform_ocr(column_bin)
-            st.write(f"### Column {i + 1} OCR Result:")
+        # Streamlit app setup
+        st.header("Display DataFrame in Streamlit")
+        df = df.transpose()
 
-            lines = ocr_text.splitlines()
-            st.write(f"Lines in Column {i + 1}:", lines)
-
-            cleaned_lines = [line for line in lines if line.strip() != '']
-            st.write(f"Cleaned Lines in Column {i + 1}:", cleaned_lines)
-
-            if df.empty:
-                df = pd.DataFrame({f"Column {i + 1}": cleaned_lines})
-            else:
-                max_len = max(len(df), len(cleaned_lines))
-                cleaned_lines.extend([''] * (max_len - len(cleaned_lines)))
-                for j, line in enumerate(cleaned_lines):
-                    if len(df) <= j:
-                        df[f"Column {i + 1}"] = ''
-                    df.at[j, f"Column {i + 1}"] = line
-
-        st.write("### Combined OCR Result Table:")
+        # Display the DataFrame in Streamlit
         st.write(df)
-
-        st.write(f"Total columns extracted: {len(column_regions)}")
 
         end_time = datetime.now()
         difference = end_time - now
@@ -300,7 +292,6 @@ def predict(image):
         st.write(f"Processing time: {time} secs")
 
 # Streamlit app setup.
-
 st.header("Data Extraction from Tables")
 
 file = st.file_uploader("Please upload a PDF file", type=["pdf"])
