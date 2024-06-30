@@ -279,9 +279,14 @@ def predict(image):
         # Convert 2D array to DataFrame
         df = pd.DataFrame(biglist)
 
+        # Transpose and set first row as header
+        df = df.transpose()
+        new_header = df.iloc[0]  # Grab the first row for the header
+        df = df[1:]  # Take the data less the header row
+        df.columns = new_header  # Set the header row as the dataframe header
+
         # Streamlit app setup
         st.header("Display DataFrame in Streamlit")
-        df = df.transpose()
 
         # Display the DataFrame in Streamlit
         st.write(df)
