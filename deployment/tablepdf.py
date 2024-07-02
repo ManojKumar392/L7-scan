@@ -12,7 +12,7 @@ from albumentations.pytorch import ToTensorV2
 import pytesseract
 import fitz  # PyMuPDF
 from matplotlib import pyplot as plt
-from app2 import process_image_app
+from linedetection import process_image_app
 
 # Define transformations
 TRANSFORM = A.Compose([
