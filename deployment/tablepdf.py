@@ -280,16 +280,34 @@ def predict(image):
         df = pd.DataFrame(biglist)
 
         # Transpose and set first row as header
-        df = df.transpose()
-        new_header = df.iloc[0]  # Grab the first row for the header
-        df = df[1:]  # Take the data less the header row
-        df.columns = new_header  # Set the header row as the dataframe header
+        if not df.empty:
+            df = df.transpose()
+            new_header = df.iloc[0]  # Grab the first row for the header
+            df = df[1:]  # Take the data less the header row
 
-        # Streamlit app setup
-        st.header("Display DataFrame in Streamlit")
+            # Sanitize column names to avoid duplicates and None
+            new_header = new_header.fillna("Unnamed")  # Replace None with 'Unnamed'
+            new_header = new_header.astype(str)  # Convert all header names to strings
+            new_header = pd.Series(new_header).str.strip()  # Strip any whitespace
+            new_header = new_header.apply(lambda x: x if x != '' else "Unnamed")  # Replace empty strings
 
-        # Display the DataFrame in Streamlit
-        st.write(df)
+            # Ensure unique column names
+            counts = new_header.value_counts()
+            duplicates = counts[counts > 1].index
+            for dup in duplicates:
+                indices = new_header[new_header == dup].index
+                for idx, index in enumerate(indices):
+                    new_header[index] = f"{dup}_{idx+1}"
+
+            df.columns = new_header  # Set the sanitized header row as the dataframe header
+
+            # Streamlit app setup
+            st.header("Display DataFrame in Streamlit")
+
+            # Display the DataFrame in Streamlit
+            st.write(df)
+        else:
+            st.write("No data extracted.")
 
         end_time = datetime.now()
         difference = end_time - now
