@@ -14,6 +14,7 @@ import fitz  # PyMuPDF
 from matplotlib import pyplot as plt
 from linedetection import process_image_app
 
+
 # Define transformations
 TRANSFORM = A.Compose([
     A.Normalize(
@@ -213,11 +214,10 @@ def predict(image):
         table_contours, _ = cv2.findContours(table_out, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         column_contours, _ = cv2.findContours(column_out, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        if not column_contours:
-            st.write("No column contours found. Skipping page.")
+        if not table_contours or not column_contours:
+            st.write("No table or column contours found. Skipping page.")
             return
 
-        # Process each column
         image_with_contours = np.array(orig_image)
         color_table = (0, 255, 0)
         color_column = (255, 0, 0)
@@ -230,91 +230,67 @@ def predict(image):
 
         st.image(image_with_contours, caption="Image with Table and Column Contours", use_column_width=True)
 
-        # Find the bounding box of the table
         table_x, table_y, table_w, table_h = cv2.boundingRect(table_contours[0])
 
         column_regions = []
-        sorted_column_regions = []
-
-        df = pd.DataFrame()
         biglist = []
 
-        # Sort column contours by their bounding rectangle's x-coordinate
         for i, contour in enumerate(sorted(column_contours, key=lambda c: cv2.boundingRect(c)[0])):
             x, y, w, h = cv2.boundingRect(contour)
-            
-            # Adjust column bounding box to match the table's top and bottom
             column_region = column_out[table_y:table_y + table_h, x:x + w]
 
-            # Check for content and minimum area threshold
-            if not np.any(column_region) or w * h < 100:  # Adjust the area threshold as needed
+            if not np.any(column_region) or w * h < 100:
                 st.write(f"## Column {i + 1} (Empty or too small, skipping)")
                 continue
 
-            # Use OpenCV for cropping to maintain quality
             orig_image_np = np.array(orig_image)
-            
             try:
-                # Use OpenCV for cropping to maintain quality
                 column_crop = orig_image_np[y:y + h, x:x + w]
                 column_crop_pil = Image.fromarray(column_crop)
 
-                # Detect horizontal lines in the column crop
-                img_bin = cv2.cvtColor(column_crop, cv2.COLOR_RGB2GRAY)
-                hor_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1))
-                image_2 = cv2.erode(img_bin, hor_kernel, iterations=3)
-                horizontal_lines = cv2.dilate(image_2, hor_kernel, iterations=3)
-                cv2.imwrite(f"column_{i + 1}_horizontal.jpg", horizontal_lines)
-                
-                # Column Image Processing
-                list1 = process_image_app(column_crop)
+                # Pass the column crop to process_image_app
+                list1 = process_image_app(column_crop_pil)
                 st.image(column_crop_pil, caption=f"Processed Column {i + 1}", use_column_width=True)
-                print("List size is ", len(list1), "\n")
                 biglist.append(list1)
 
             except Exception as e:
-                st.write(f"## Error processing Column {i + 1}: not a proper table")
+                st.write(f"## Error processing Column {i + 1}: {e}")
                 continue
 
-        # Convert 2D array to DataFrame
-        df = pd.DataFrame(biglist)
+        if biglist:
+            df = pd.DataFrame(biglist)
 
-        # Transpose and set first row as header
-        if not df.empty:
-            df = df.transpose()
-            new_header = df.iloc[0]  # Grab the first row for the header
-            df = df[1:]  # Take the data less the header row
+            if not df.empty:
+                df = df.transpose()
+                new_header = df.iloc[0]
+                df = df[1:]
 
-            # Sanitize column names to avoid duplicates and None
-            new_header = new_header.fillna("Unnamed")  # Replace None with 'Unnamed'
-            new_header = new_header.astype(str)  # Convert all header names to strings
-            new_header = pd.Series(new_header).str.strip()  # Strip any whitespace
-            new_header = new_header.apply(lambda x: x if x != '' else "Unnamed")  # Replace empty strings
+                new_header = new_header.fillna("Unnamed")
+                new_header = new_header.astype(str)
+                new_header = pd.Series(new_header).str.strip()
+                new_header = new_header.apply(lambda x: x if x != '' else "Unnamed")
 
-            # Ensure unique column names
-            counts = new_header.value_counts()
-            duplicates = counts[counts > 1].index
-            for dup in duplicates:
-                indices = new_header[new_header == dup].index
-                for idx, index in enumerate(indices):
-                    new_header[index] = f"{dup}_{idx+1}"
+                counts = new_header.value_counts()
+                duplicates = counts[counts > 1].index
+                for dup in duplicates:
+                    indices = new_header[new_header == dup].index
+                    for idx, index in enumerate(indices):
+                        new_header[index] = f"{dup}_{idx+1}"
 
-            df.columns = new_header  # Set the sanitized header row as the dataframe header
+                df.columns = new_header
 
-            # Streamlit app setup
-            st.header("Display DataFrame in Streamlit")
+                st.header("Display DataFrame in Streamlit")
+                st.write(df)
 
-            # Display the DataFrame in Streamlit
-            st.write(df)
+            else:
+                st.write("No valid columns detected in this page.")
         else:
-            st.write("No data extracted.")
+            st.write("No valid columns detected in this page.")
 
         end_time = datetime.now()
         difference = end_time - now
-        time = "{}".format(difference)
-        st.write(f"Processing time: {time} secs")
+        st.write(f"Processing time: {difference.seconds} secs")
 
-# Streamlit app setup.
 st.header("Data Extraction from Tables")
 
 file = st.file_uploader("Please upload a PDF file", type=["pdf"])
