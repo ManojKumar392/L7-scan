@@ -29,7 +29,11 @@ def process_image_app(img, save_dir="..\\processed_images"):
         try:
             column_pil_img = Image.open(column_img_path)
             model = genai.GenerativeModel(model_name="gemini-1.5-flash")
-            prompt = "Get the text sentence below sentence. Each sentence is seperated by the visible line."
+            prompt = """The cells in the image are separated by either spaces or visible lines. Please extract the content of the cells and provide the text in the following format:
+
+Each cell's content should be on its own line.
+The text from the first cell should appear on the first line, the text from the second cell on the second line, and so on.
+Ignore any empty or blank cells."""
             response = model.generate_content([prompt, column_pil_img])
             print(response)
             csv_text = response.text.strip()
