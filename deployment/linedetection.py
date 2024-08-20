@@ -9,10 +9,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configure Google Gemini API key
-api_key = os.getenv("GOOGLE_API_KEY")
-if not api_key:
-    raise ValueError("The GOOGLE_API_KEY environment variable is not set.")
-genai.configure(api_key=api_key)
+# api_key = os.getenv("GOOGLE_API_KEY")
+# if not api_key:
+#     raise ValueError("The GOOGLE_API_KEY environment variable is not set.")
+genai.configure(api_key="Your key")
 
 def process_image_app(img, save_dir="..\\processed_images"):
     try:
@@ -29,11 +29,10 @@ def process_image_app(img, save_dir="..\\processed_images"):
         try:
             column_pil_img = Image.open(column_img_path)
             model = genai.GenerativeModel(model_name="gemini-1.5-flash")
-            prompt = """The cells in the image are separated by either spaces or visible lines. Please extract the content of the cells and provide the text in the following format:
-
-Each cell's content should be on its own line.
-The text from the first cell should appear on the first line, the text from the second cell on the second line, and so on.
-Ignore any empty or blank cells."""
+            prompt = """ Please extract the content of the cells and provide the text in the following format:
+Each cell's content should be merged into a single line, even if the cell spans multiple lines in the image. 
+The text from the first cell should appear on the first line of the output, the text from the second cell on the second line, and so on.
+Ignore any empty or blank cells. Ensure that line breaks within a cell are merged and not treated as separate lines."""
             response = model.generate_content([prompt, column_pil_img])
             print(response)
             csv_text = response.text.strip()
