@@ -291,12 +291,23 @@ def predict(image):
         difference = end_time - now
         st.write(f"Processing time: {difference.seconds} secs")
 
-st.header("Data Extraction from Tables")
+# Streamlit app UI
+def main():
+    st.title("Table Detection and OCR")
 
-file = st.file_uploader("Please upload a PDF file", type=["pdf"])
+    # Allow user to upload a file (either image or PDF)
+    uploaded_file = st.file_uploader("Choose an image or PDF file", type=["jpg", "jpeg", "png", "pdf"])
 
-if file is not None:
-    images = pdf_to_images(file)
-    for i, image in enumerate(images):
-        st.write(f"Processing page {i + 1}/{len(images)}")
-        predict(image)
+    if uploaded_file:
+        # Check if the uploaded file is a PDF
+        if uploaded_file.name.endswith(".pdf"):
+            images = pdf_to_images(uploaded_file)
+            for img in images:
+                predict(img)
+        else:
+            # Process as a single image
+            image = Image.open(uploaded_file)
+            predict(image)
+
+if __name__ == "__main__":
+    main()
