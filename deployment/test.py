@@ -5,7 +5,7 @@ from PIL import Image
 import google.generativeai as genai
 
 # Configure the Gemini API key
-api_key = "AIzaSyANZK3iFbll47LL55Qvv41HDugMACLkEpA"
+api_key = "key"
 genai.configure(api_key=api_key)
 
 # Function to extract text using Gemini API
