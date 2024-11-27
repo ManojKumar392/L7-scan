@@ -1,157 +1,167 @@
 import streamlit as st
 import cv2
 import numpy as np
+from PIL import Image
+import fitz  # PyMuPDF for PDF handling
+import google.generativeai as genai
 
-# Function to display images using streamlit
-def display_image_st(title, image):
-    """Helper function to display images using streamlit"""
-    st.write(title)
-    st.image(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+# Configure the Gemini API key
+api_key = "API-KEY"
+genai.configure(api_key=api_key)
 
-def count_remaining_contours(dilate):
-    """Count contours in a dilated image"""
-    cnts = cv2.findContours(dilate, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cnts = cnts[0] if len(cnts) == 2 else cnts[1]
-    return len(cnts), cnts
+# Function to extract text using Gemini API
+def extract_text_with_gemini(image, roi=None):
+    """
+    Extract text using Gemini API and ensure different parts of the text
+    (e.g., axis labels, numbers, and legends) are separated by new lines.
+    """
+    if roi is not None:
+        x, y, w, h = roi
+        cropped = image[y:y+h, x:x+w]
+    else:
+        cropped = image
 
-# Streamlit UI
-st.title('Graph/Image Detection')
-uploaded_file = st.file_uploader("Upload an image", type=['png', 'jpg', 'jpeg'])
+    # Convert the cropped image to PIL format
+    pil_image = Image.fromarray(cropped)
 
-if uploaded_file is not None:
-    # Step 1: Load image from uploaded file
-    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-    image = cv2.imdecode(file_bytes, 1)
+    try:
+        prompt = (
+            "Extract the text content from the image and separate it logically. "
+            "Each distinct text component (e.g., axis labels(both mandatorily), legends, or individual values) "
+            "should appear on a new line. Do not include any additional information or explanations."
+        )
+        model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+        response = model.generate_content([prompt, pil_image])
+        extracted_text = response.text.strip()
+        return extracted_text
+    except Exception as e:
+        return f"Error in Gemini API: {e}"
+
+# Function to find outliers using IQR
+def find_outliers_with_iqr(cnts, min_area=2000, image_shape=None):
+    """Find outliers based on compactness ratio using IQR."""
+    compactness_ratios = []
+    bounding_boxes = []
+
+    # Calculate compactness ratios for each contour
+    for c in cnts:
+        x, y, w, h = cv2.boundingRect(c)
+        area = cv2.contourArea(c)
+        bounding_box_area = w * h
+
+        # Ignore regions covering almost the entire image
+        if image_shape is not None:
+            image_height, image_width = image_shape
+            if w >= 0.95 * image_width and h >= 0.95 * image_height:
+                continue  # Skip regions that are too large
+
+        if area >= min_area and bounding_box_area > 0:
+            compactness = area / bounding_box_area
+            compactness_ratios.append(compactness)
+            bounding_boxes.append((x, y, w, h))
+
+    # Calculate IQR to find compactness outliers
+    if compactness_ratios:
+        q1 = np.percentile(compactness_ratios, 25)
+        q3 = np.percentile(compactness_ratios, 75)
+        iqr = q3 - q1
+        lower_bound = q1 - 1.5 * iqr
+        upper_bound = q3 + 1.5 * iqr
+
+        # Filter out contours that are outliers
+        outlier_indices = [
+            i for i, ratio in enumerate(compactness_ratios)
+            if ratio < lower_bound or ratio > upper_bound
+        ]
+        outlier_boxes = [bounding_boxes[i] for i in outlier_indices]
+    else:
+        outlier_boxes = []
+
+    return outlier_boxes
+
+# Function to process the image
+def process_image(input_image):
+    """Process the image and find graph-like regions using outlier detection."""
+    # Step 1: Convert to OpenCV format
+    image = np.array(input_image)
     original = image.copy()
-    
+
     # Step 2: Convert to grayscale
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # Step 3: Apply Otsu's thresholding to binarize the image
+    # Step 3: Apply Otsu's thresholding
     thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
 
-    # Step 4: Dilate the image with a horizontal kernel to connect words/lines
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 5))
+    # Step 4: Dilate with a horizontal kernel
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (10, 5))
     dilate = cv2.dilate(thresh, kernel, iterations=1)
 
-    # Step 5: Find contours for size-based filtering
+    # Step 5: Find contours in the dilated image
     cnts = cv2.findContours(dilate, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cnts = cnts[0] if len(cnts) == 2 else cnts[1]
-    min_area = 2000  # Set minimum area to filter out small contours
 
-    # Filter small contours
-    for c in cnts:
-        area = cv2.contourArea(c)
-        if area < min_area:
-            cv2.drawContours(dilate, [c], -1, (0, 0, 0), -1)
+    # Step 6: Detect outliers using compactness ratio
+    outlier_boxes = find_outliers_with_iqr(cnts, min_area=2000, image_shape=image.shape[:2])
 
-    # Function to apply mean-based compactness filtering
-    def mean_based_compactness_filter(dilate):
-        cnts = cv2.findContours(dilate, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cnts = cnts[0] if len(cnts) == 2 else cnts[1]
-        areas = [cv2.contourArea(c) for c in cnts if cv2.contourArea(c) >= min_area]
+    # Draw bounding boxes around outliers and extract text using OCR
+    image_with_outliers = original.copy()
+    extracted_texts = []  # List to store extracted texts
+    for x, y, w, h in outlier_boxes:
+        cv2.rectangle(image_with_outliers, (x, y), (x + w, y + h), (0, 0, 255), 2)
+        extracted_text = extract_text_with_gemini(original, roi=(x, y, w, h))
+        extracted_texts.append((x, y, w, h, extracted_text))  # Store region and text
 
-        # Calculate mean and std of areas
-        if areas:
-            mean_area = np.mean(areas)
-            std_area = np.std(areas)
-            compactness_threshold = mean_area / (mean_area + std_area) if (mean_area + std_area) != 0 else 0.65
-        else:
-            compactness_threshold = 0.65
-        
-        # Filter contours based on compactness
-        for c in cnts:
-            x, y, w, h = cv2.boundingRect(c)
-            area = cv2.contourArea(c)
-            bounding_box_area = w * h
+    return image_with_outliers, len(outlier_boxes), extracted_texts
 
-            if bounding_box_area > 0:  # To avoid division by zero
-                compactness = area / bounding_box_area
-                if compactness > compactness_threshold:
-                    cv2.drawContours(dilate, [c], -1, (0, 0, 0), -1)
+# Function to convert PDF to images
+def pdf_to_images(pdf_file):
+    """Convert a PDF to a list of images."""
+    pdf_data = pdf_file.read()  # Read the PDF file
+    doc = fitz.open("pdf", pdf_data)  # Open PDF using PyMuPDF
+    images = []
 
-        return dilate
+    # Iterate over each page in the PDF
+    for page_num in range(len(doc)):
+        page = doc.load_page(page_num)  # Load a page
+        pix = page.get_pixmap()  # Render page to a pixel map
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)  # Convert to PIL Image
+        images.append(img)
 
-    # Function to apply median-based compactness filtering
-    def median_based_compactness_filter(dilate):
-        cnts = cv2.findContours(dilate, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cnts = cnts[0] if len(cnts) == 2 else cnts[1]
+    return images
 
-        # Calculate compactness for each contour
-        compactness_ratios = []
-        for c in cnts:
-            x, y, w, h = cv2.boundingRect(c)
-            area = cv2.contourArea(c)
-            bounding_box_area = w * h
-            if bounding_box_area > 0:
-                compactness = area / bounding_box_area
-                compactness_ratios.append(compactness)
+# Streamlit App
+st.title("Graph Region Detection with OCR")
+uploaded_file = st.file_uploader("Upload an image or PDF file", type=["png", "jpg", "jpeg", "pdf"])
 
-        if compactness_ratios:
-            median_compactness = np.median(compactness_ratios)
-            adjustment_factor = 0.0001  # Fine-tune as needed
-            compactness_threshold = median_compactness + adjustment_factor
-        else:
-            compactness_threshold = 0.65
+if uploaded_file:
+    if uploaded_file.type == "application/pdf":
+        # Handle PDF input
+        st.write("Uploaded file is a PDF.")
+        images = pdf_to_images(uploaded_file)
 
-        # Filter contours based on improved compactness threshold
-        for c in cnts:
-            x, y, w, h = cv2.boundingRect(c)
-            area = cv2.contourArea(c)
-            bounding_box_area = w * h
+        for page_num, image in enumerate(images):
+            st.write(f"Processing Page {page_num + 1}...")
+            processed_image, num_regions, extracted_texts = process_image(image)
 
-            if bounding_box_area > 0:
-                compactness = area / bounding_box_area
-                if compactness > compactness_threshold:
-                    cv2.drawContours(dilate, [c], -1, (0, 0, 0), -1)
-
-        return dilate
-
-    # Clone the dilated image for each approach
-    dilate_mean = dilate.copy()
-    dilate_median = dilate.copy()
-
-    # Apply both filtering approaches
-    dilate_mean = mean_based_compactness_filter(dilate_mean)
-    dilate_median = median_based_compactness_filter(dilate_median)
-
-    # Count remaining contours in each approach
-    count_mean, cnts_mean = count_remaining_contours(dilate_mean)
-    count_median, cnts_median = count_remaining_contours(dilate_median)
-
-    # Clone original image to draw bounding boxes for final output
-    image_mean = original.copy()
-    image_median = original.copy()
-
-    # Get image dimensions
-    image_height, image_width = image.shape[:2]
-
-    # Draw bounding boxes for mean-based filtering result
-    for i, c in enumerate(cnts_mean):
-        x, y, w, h = cv2.boundingRect(c)
-        
-        # Skip bounding boxes that are almost as large as the whole image
-        if w >= 0.95 * image_width and h >= 0.95 * image_height:
-            continue  # Skip this bounding box
-        
-        cv2.rectangle(image_mean, (x, y), (x + w, y + h), (36, 255, 12), 3)
-
-    # Draw bounding boxes for median-based filtering result
-    for i, c in enumerate(cnts_median):
-        x, y, w, h = cv2.boundingRect(c)
-        
-        # Skip bounding boxes that are almost as large as the whole image
-        if w >= 0.95 * image_width and h >= 0.95 * image_height:
-            continue  # Skip this bounding box
-        
-        cv2.rectangle(image_median, (x, y), (x + w, y + h), (36, 255, 12), 3)
-
-    # Display the final result with the lowest number of regions, ignoring 1 region (whole)
-    if (count_mean > 1 and count_median == 1) or (count_mean > 1 and count_mean < count_median):
-        st.write(f"Mean-Based Filtering Selected with {count_mean} contours")
-        display_image_st('Final Result - Mean-Based Filtering', image_mean)
-    elif (count_median > 1 and count_mean == 1) or (count_median > 1 and count_median < count_mean):
-        st.write(f"Median-Based Filtering Selected with {count_median} contours")
-        display_image_st('Final Result - Median-Based Filtering', image_median)
+            if num_regions > 0:
+                st.write(f"Detected {num_regions} graph-like regions on page {page_num + 1}.")
+                st.image(cv2.cvtColor(processed_image, cv2.COLOR_BGR2RGB), caption=f"Page {page_num + 1} - Graph Regions")
+                for region in extracted_texts:
+                    x, y, w, h, text = region
+                    st.write(f"Region (x={x}, y={y}, w={w}, h={h}): {text}")
+            else:
+                st.write(f"No graph-like regions detected on page {page_num + 1}.")
     else:
-        st.write("No contours found in either filtering approach.")
+        # Handle image input
+        st.write("Uploaded file is an image.")
+        input_image = Image.open(uploaded_file)
+        processed_image, num_regions, extracted_texts = process_image(input_image)
+
+        if num_regions > 0:
+            st.write(f"Detected {num_regions} graph-like regions.")
+            st.image(cv2.cvtColor(processed_image, cv2.COLOR_BGR2RGB), caption="Graph Regions Detected")
+            for region in extracted_texts:
+                x, y, w, h, text = region
+                st.write(f"Region (x={x}, y={y}, w={w}, h={h}): {text}")
+        else:
+            st.write("No graph-like regions detected.")
